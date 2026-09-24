@@ -110,7 +110,7 @@ const routes = [
         meta: {
           title: "របាយការណ៍បើកប្រាក់ខែ",
           icon: "Money",
-          short: "របាយការណ៍បើកប្រាក់ខែ",
+          short: "ប្រាក់ខែ",
           showInNav: true,
         },
       },

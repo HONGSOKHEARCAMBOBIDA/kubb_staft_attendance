@@ -2,13 +2,19 @@
   <div class="dashboard">
     <div class="dash-grid">
       <el-card class="dash-card">
-        <template #header><span class="card-title">សកម្មភាពរហ័ស</span></template>
+        <!-- <template #header><span class="card-title">សកម្មភាពរហ័ស</span></template> -->
         <div class="action-grid">
           <div class="action-btn" @click="$router.push('/users')">
             <el-icon size="26" color="#409eff">
               <UserFilled />
             </el-icon>
             <span>បុគ្គលិក</span>
+          </div>
+                    <div class="action-btn" @click="$router.push('/company')">
+            <el-icon size="26" color="#f56c6c">
+              <OfficeBuilding />
+            </el-icon>
+            <span>ក្រុមហ៑ុន</span>
           </div>
           <div class="action-btn" @click="$router.push('/attendance')">
             <el-icon size="26" color="#67c23a">
@@ -22,24 +28,20 @@
             </el-icon>
             <span>ប្រភេទច្បាប់ក្នុងក្រុមហ៑ុន</span>
           </div>
-          <div class="action-btn" @click="$router.push('/leaverequest')">
-            <el-icon size="26" color="#67C23A">
-              <Promotion />
-            </el-icon>
-            <span>សុំច្បាប់</span>
-          </div>
+
           <div class="action-btn" @click="$router.push('/createattendance')">
             <el-icon size="26" color="#e6a23c">
               <Camera />
             </el-icon>
             <span>កត់ត្រាវត្តមាន</span>
           </div>
-          <div class="action-btn" @click="$router.push('/company')">
-            <el-icon size="26" color="#f56c6c">
-              <OfficeBuilding />
+                    <div class="action-btn" @click="$router.push('/leaverequest')">
+            <el-icon size="26" color="#67C23A">
+              <Promotion />
             </el-icon>
-            <span>ក្រុមហ៑ុន</span>
+            <span>សុំច្បាប់</span>
           </div>
+
         </div>
       </el-card>
 

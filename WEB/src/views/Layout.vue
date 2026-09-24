@@ -3,7 +3,7 @@
     <aside class="sidebar" :class="{ collapsed }">
       <div class="sidebar-header">
         <el-icon size="26" color="#fff"><UserFilled /></el-icon>
-        <span v-if="!collapsed" class="brand">ប្រព័ន្ធគ្រប់គ្រងធនធានមនុស្ស</span>
+        <span v-if="!collapsed" class="brand">{{ companyname }}</span>
       </div>
       <el-menu :default-active="$route.path" router :collapse="collapsed"
         background-color="var(--brand-color)" text-color="#a0a8c0" active-text-color="#fff">
@@ -60,6 +60,7 @@ const router = useRouter()
 const auth = useAuthStore()
 const userdataStore = useUserDataStore()
 const userName = computed(() => userdataStore.name || 'User')
+const companyname = computed(() => userdataStore.companyname || 'Company')
 const collapsed = ref(false)
 const nav = computed(() => {
   return router.getRoutes()

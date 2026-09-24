@@ -857,8 +857,10 @@ func (s *authservice) GetUserData(ctx context.Context, id int) (response.UserDat
 			u.id AS id,
 			u.name AS name,
 			u.role_id AS role_id,
-			u.company_id AS company_id
+			u.company_id AS company_id,
+			c.name AS company_name
 		`).
+		Joins(`LEFT JOIN "company" c ON c.id = u.company_id`).
 		Where("u.id = ?", id).First(&userdata).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return userdata, fmt.Errorf("user with id %d not found", id)
