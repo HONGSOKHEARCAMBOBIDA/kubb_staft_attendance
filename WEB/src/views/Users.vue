@@ -531,7 +531,7 @@ function startShiftCreate() {
     {
       day: day.value,
       shift_type: 1,
-      check_in1: "08:00",
+      check_in1: "07:00",
       check_out1: "11:30",
       check_in2: "13:30",
       check_out2: "17:00",
@@ -552,7 +552,7 @@ function addNewShiftRow() {
   newShifts.value.push({
     day: lastDay + 1,
     shift_type: 1,
-    check_in1: "08:00",
+    check_in1: "07:00",
     check_out1: "11:30",
     check_in2: "13:30",
     check_out2: "17:00",

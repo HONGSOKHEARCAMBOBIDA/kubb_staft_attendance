@@ -20,6 +20,7 @@ API/main
 API/server
 API/bin/
 API/build/
+API/backups/
 
 # Go test / coverage
 *.test

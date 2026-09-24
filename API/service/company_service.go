@@ -38,9 +38,12 @@ func NewCompanyService() CompanyService {
 func (s *companyservice) GetCompanyColor(userID int) (response.CompanyColor, error) {
 	var color response.CompanyColor
 
+	// NOTE: "user" is a reserved keyword in Postgres and MUST be double-quoted,
+	// otherwise this will throw a syntax error on Postgres even though MySQL
+	// tolerates it unquoted.
 	err := s.db.Table("company AS c").
 		Select(`c.color AS color`).
-		Joins("LEFT JOIN user u ON u.company_id = c.id").
+		Joins(`LEFT JOIN "user" u ON u.company_id = c.id`).
 		Where("u.id = ?", userID).
 		Scan(&color).Error
 
@@ -59,6 +62,13 @@ func (s *companyservice) GetCompany(id int, ctx context.Context, pf request.Pagi
 	}
 	var totalCount int64
 	offset := (pf.Page - 1) * pf.PageSize
+
+	// NOTE: verify the actual migrated column name for group chat ID.
+	// GORM's default naming strategy typically turns GroupChatID into
+	// group_chat_id (underscore before "id"), not group_chatid/group_chatID.
+	// Postgres also lower-cases unquoted identifiers, so "c.group_chatID"
+	// resolves to "c.group_chatid" here — confirm this matches your schema
+	// before cutting over, or quote it explicitly if the column is mixed-case.
 	query := s.db.WithContext(ctx).Table("company AS c").
 		Select(`
 		c.id AS id,
@@ -76,8 +86,13 @@ func (s *companyservice) GetCompany(id int, ctx context.Context, pf request.Pagi
 		c.color AS color,
 		c.total_work_day AS total_work_day,
 		COUNT(u.id) AS user_count
-	`).Joins("LEFT JOIN user AS u ON u.company_id = c.id").
+	`).Joins(`LEFT JOIN "user" AS u ON u.company_id = c.id`).
 		Group("c.id")
+
+	// NOTE: this GROUP BY c.id + ungrouped column selection only works on
+	// Postgres if c.id is the table's actual PRIMARY KEY (not just a unique
+	// index) — Postgres allows functional-dependency exceptions to GROUP BY
+	// only for primary keys. Confirm this in your Postgres DDL.
 
 	// if user.Role.Level < 7 {
 	// 	query = query.Where("c.id = ?", user.CompanyID)
@@ -168,14 +183,22 @@ func (s *companyservice) CreateCompany(ctx context.Context, input request.Compan
 
 	encryptedChatID, err := utils.EncryptChatID(chatIDStr)
 	if err != nil {
+		// FIX: was missing tx.Rollback() — on Postgres, a transaction left
+		// open after an error goes into an aborted state and poisons the
+		// pooled connection until it's explicitly rolled back or times out.
+		tx.Rollback()
 		return err
 	}
 	encryptedBottoken, err := utils.EncryptBotToken(input.BotToken)
 	if err != nil {
+		// FIX: was missing tx.Rollback()
+		tx.Rollback()
 		return err
 	}
 	lat, lng, err := utils.ExtractLatLngFromGoogleMapsURL(input.MapLink)
 	if err != nil {
+		// FIX: was missing tx.Rollback()
+		tx.Rollback()
 		return fmt.Errorf("invalid map_link: %w", err)
 	}
 	newCompany := model.Company{
@@ -247,9 +270,9 @@ func (s *companyservice) UpdateCompany(ctx context.Context, id int, input reques
 		updates["total_work_day"] = *input.TotalWorkDay
 	}
 	if len(updates) == 0 {
-		return errors.New(" no field to update")
+		return errors.New("no field to update")
 	}
-	result := s.db.WithContext(ctx).Model(&model.Company{}).Where("id =?", id).Updates(updates)
+	result := s.db.WithContext(ctx).Model(&model.Company{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -257,7 +280,7 @@ func (s *companyservice) UpdateCompany(ctx context.Context, id int, input reques
 }
 
 func (s *companyservice) ChangeStatusCompany(ctx context.Context, id int) error {
-	result := s.db.WithContext(ctx).Model(&model.Company{}).Where("id =?", id).Update("is_active", gorm.Expr("NOT is_active"))
+	result := s.db.WithContext(ctx).Model(&model.Company{}).Where("id = ?", id).Update("is_active", gorm.Expr("NOT is_active"))
 	if result.Error != nil {
 		return result.Error
 	}
@@ -283,12 +306,12 @@ func (s *companyservice) UpdateTelegram(ctx context.Context, id int, input reque
 		if err != nil {
 			return err
 		}
-		updates["group_chatID"] = encryptedChatID
+		updates["group_chatid"] = encryptedChatID
 	}
 	if len(updates) == 0 {
-		return errors.New(" no field to update")
+		return errors.New("no field to update")
 	}
-	result := s.db.WithContext(ctx).Model(&model.Company{}).Where("id =?", id).Updates(updates)
+	result := s.db.WithContext(ctx).Model(&model.Company{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}

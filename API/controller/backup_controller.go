@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"log"
 	"mysql/backup"
 	"mysql/constant/share"
 	"net/http"
@@ -18,6 +19,7 @@ func NewBackupController() *BackupController {
 func (bc *BackupController) TriggerBackup(c *gin.Context) {
 	result, err := backup.Run()
 	if err != nil {
+		log.Printf("ERROR %w", err)
 		share.ResponseError(c, http.StatusInternalServerError, err.Error())
 		return
 	}

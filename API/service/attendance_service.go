@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"log/slog"
 	"mysql/config"
 	"mysql/helper"
 	"mysql/model"
@@ -276,7 +277,7 @@ func (s *attendanceservice) CreateAttendance(ctx context.Context, id int, input 
 	distance := utils.CalculateDistance(companyLat, companyLng, userLat, userLng)
 	inzone := distance <= radius
 
-	if !inzone && company.CanScanOutsize == 0 {
+	if !inzone && company.CanScanOutsize == false {
 		return errors.New("អ្នកមិនអាចស្កែនក្រៅតំបន់ក្រុមហ៊ុនបានទេ")
 	}
 
@@ -366,22 +367,30 @@ func (s *attendanceservice) notifyTelegram(
 	reason string,
 ) {
 	if user.Company.GroupChatID == nil || user.Company.BotToken == nil {
+		slog.Warn("telegram notification skipped: no chat/bot configured", "user_id", user.ID, "company_id", user.CompanyID)
 		return
 	}
 
 	groupChatID, err := utils.DecryptChatID(*user.Company.GroupChatID)
 	if err != nil {
-		fmt.Errorf("failed to decrypt group chat id %w", err)
+		// FIX: was fmt.Errorf(...) with the result discarded — built an
+		// error value and threw it away, so this failure was invisible.
+		slog.Error("failed to decrypt group chat id", "error", err, "user_id", user.ID)
 		return
 	}
 	botToken, err := utils.DecryptBotToken(*user.Company.BotToken)
 	if err != nil {
-		fmt.Errorf("failed to decrypt bot token %w", err)
+		// FIX: was missing this return entirely — execution used to fall
+		// through and attempt to send with an empty/garbage bot token.
+		slog.Error("failed to decrypt bot token", "error", err, "user_id", user.ID)
+		return
 	}
 
 	checktype, ok := checkTypeLabel[current.recordType]
 	if !ok {
-		fmt.Errorf("unknown record type for notification %w", err)
+		// FIX: previously referenced a stale "err" from the block above
+		// (which could be nil) instead of describing the actual problem.
+		slog.Error("unknown record type for telegram notification", "record_type", current.recordType, "user_id", user.ID)
 		return
 	}
 
@@ -419,10 +428,16 @@ func (s *attendanceservice) notifyTelegram(
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Errorf("panic while sending telegram message")
+				// FIX: was fmt.Errorf(...) with the result discarded.
+				slog.Error("panic while sending telegram message", "recover", r, "user_id", user.ID)
 			}
 		}()
-		helper.SendTelegramMessage(message, groupChatID, botToken)
+		// FIX: the returned error was never checked. Now the API-level
+		// rejection surfaced by the updated SendTelegramMessage actually
+		// gets logged instead of vanishing.
+		if err := helper.SendTelegramMessage(message, groupChatID, botToken); err != nil {
+			slog.Error("failed to send telegram message", "error", err, "user_id", user.ID)
+		}
 	}()
 }
 
@@ -444,256 +459,6 @@ func attendanceTypeLabel(attendanceType int) string {
 		return ""
 	}
 }
-
-// func (s *attendanceservice) CreateAttendance(ctx context.Context, id int, input request.AttendanceRequestCreate) error {
-// 	tx := s.db.WithContext(ctx).Begin()
-// 	if tx.Error != nil {
-// 		return tx.Error
-// 	}
-
-// 	committed := false
-// 	defer func() {
-// 		if r := recover(); r != nil {
-// 			tx.Rollback()
-// 		} else if !committed {
-// 			tx.Rollback()
-// 		}
-// 	}()
-
-// 	now := time.Now()
-// 	currentDate := now.Format("2006-01-02")
-// 	currentTime := now.Format("15:04:05")
-// 	dayofweek := helper.GetCurrentDay()
-
-// 	var user model.User
-// 	if err := s.db.WithContext(ctx).Preload("Company").First(&user, id).Error; err != nil {
-// 		tx.Rollback()
-// 		return err
-// 	}
-
-// 	var shift model.Shift
-// 	if err := tx.Where("user_id = ? AND day = ?", user.ID, dayofweek).First(&shift).Error; err != nil {
-// 		tx.Rollback()
-// 		return err
-// 	}
-// 	if shift.IsDayoff {
-// 		tx.Rollback()
-// 		return errors.New("today is dayoff")
-// 	}
-
-// 	companyLat, err := strconv.ParseFloat(user.Company.Latitude, 64)
-// 	if err != nil {
-// 		tx.Rollback()
-// 		return err
-// 	}
-// 	companyLng, err := strconv.ParseFloat(user.Company.Longitude, 64)
-// 	if err != nil {
-// 		tx.Rollback()
-// 		return err
-// 	}
-// 	userLat, err := strconv.ParseFloat(input.Latitude, 64)
-// 	if err != nil {
-// 		tx.Rollback()
-// 		return err
-// 	}
-// 	userLng, err := strconv.ParseFloat(input.Longitude, 64)
-// 	if err != nil {
-// 		tx.Rollback()
-// 		return err
-// 	}
-// 	radius, err := strconv.ParseFloat(user.Company.Radius, 64)
-// 	if err != nil {
-// 		tx.Rollback()
-// 		return err
-// 	}
-
-// 	distance := utils.CalculateDistance(companyLat, companyLng, userLat, userLng)
-// 	inZone := distance <= radius
-
-// 	if !inZone && user.Company.CanScanOutsize == 0 {
-// 		tx.Rollback()
-// 		return errors.New("អ្នកមិនអាចស្កែនក្រៅតំបន់ក្រុមហ៊ុនបានទេ")
-// 	}
-
-// 	var attendance model.Attendance
-// 	err = tx.Where("user_id = ? AND check_date = ?", user.ID, currentDate).First(&attendance).Error
-// 	if err != nil {
-// 		if !errors.Is(err, gorm.ErrRecordNotFound) {
-// 			tx.Rollback()
-// 			return err
-// 		}
-
-// 		attendance = model.Attendance{
-// 			UserID:    user.ID,
-// 			CheckDate: currentDate,
-// 			Status:    "WORKING",
-// 		}
-// 		if err := tx.Create(&attendance).Error; err != nil {
-// 			tx.Rollback()
-// 			return err
-// 		}
-// 	}
-
-// 	var existingRecords []model.AttendanceRecord
-// 	if err := tx.Where("attendance_id = ?", attendance.ID).
-// 		Order("id ASC").
-// 		Find(&existingRecords).Error; err != nil {
-// 		tx.Rollback()
-// 		return err
-// 	}
-
-// 	recordCount := len(existingRecords)
-
-// 	// Build session list based on ShiftType
-// 	// ShiftType 1 = Full day    → CheckIn1, CheckOut1, CheckIn2, CheckOut2
-// 	// ShiftType 2 = Morning only → CheckIn1, CheckOut1
-// 	// ShiftType 3 = Evening only → CheckIn2, CheckOut2
-
-// 	type sessionConfig struct {
-// 		scheduledTime string
-// 		isCheckIn     bool
-// 		recordType    int // 1=CheckIn1, 2=CheckOut1, 3=CheckIn2, 4=CheckOut2
-// 	}
-
-// 	var sessions []sessionConfig
-
-// 	switch shift.ShiftType {
-
-// 	case 2:
-// 		if shift.CheckIn1 == nil || shift.CheckOut1 == nil {
-// 			return errors.New("ធ្វេីការវែនព្រឹកតែមិនទាន់ដាក់ម៉ោងចេញចូល")
-// 		}
-// 		sessions = []sessionConfig{
-// 			{scheduledTime: *shift.CheckIn1, isCheckIn: true, recordType: 1},
-// 			{scheduledTime: *shift.CheckOut1, isCheckIn: false, recordType: 2},
-// 		}
-// 	case 3:
-// 		if shift.CheckIn2 == nil || shift.CheckOut2 == nil {
-// 			return errors.New("ធ្វេីការវែនល្ងាចតែមិនទាន់ដាក់ម៉ោងចេញចូល")
-// 		}
-// 		sessions = []sessionConfig{
-// 			{scheduledTime: *shift.CheckIn2, isCheckIn: true, recordType: 3},
-// 			{scheduledTime: *shift.CheckOut2, isCheckIn: false, recordType: 4},
-// 		}
-// 	default:
-// 		if shift.CheckIn1 == nil || shift.CheckOut1 == nil || shift.CheckIn2 == nil || shift.CheckOut2 == nil {
-// 			return errors.New("គ្មានម៉ោងធ្វេីការ")
-// 		}
-// 		sessions = []sessionConfig{
-// 			{scheduledTime: *shift.CheckIn1, isCheckIn: true, recordType: 1},
-// 			{scheduledTime: *shift.CheckOut1, isCheckIn: false, recordType: 2},
-// 			{scheduledTime: *shift.CheckIn2, isCheckIn: true, recordType: 3},
-// 			{scheduledTime: *shift.CheckOut2, isCheckIn: false, recordType: 4},
-// 		}
-// 	}
-
-// 	maxRecords := len(sessions)
-
-// 	if recordCount >= maxRecords {
-// 		if err := tx.Model(&model.Attendance{}).
-// 			Where("id = ?", attendance.ID).
-// 			Update("status", "COMPLETE").Error; err != nil {
-// 			return fmt.Errorf("failed to update attendance status: %w", err)
-// 		}
-// 		if err := tx.Commit().Error; err != nil {
-// 			return err
-// 		}
-// 		committed = true
-// 		return errors.New("all check-ins and check-outs completed for today")
-// 	}
-
-// 	current := sessions[recordCount]
-
-// 	attendanceType := helper.DetermineAttendanceType(currentTime, current.scheduledTime, current.isCheckIn)
-
-// 	record := model.AttendanceRecord{
-// 		AttendanceID:   attendance.ID,
-// 		ShiftID:        shift.ID,
-// 		AttendanceType: attendanceType,
-// 		Reason:         input.Reason,
-// 		CheckTime:      currentTime,
-// 		Type:           current.recordType,
-// 		Inzone:         inZone,
-// 		Latitude:       input.Latitude,
-// 		Longitude:      input.Longitude,
-// 	}
-// 	if err := tx.Create(&record).Error; err != nil {
-// 		return err
-// 	}
-
-// 	if recordCount+1 >= maxRecords {
-// 		if err := tx.Model(&model.Attendance{}).
-// 			Where("id = ?", attendance.ID).
-// 			Update("status", "COMPLETE").Error; err != nil {
-// 			return fmt.Errorf("failed to update attendance status: %w", err)
-// 		}
-// 	}
-
-// 	workTime := fmt.Sprintf("%s", current.scheduledTime)
-// 	lateText := ""
-
-// 	switch attendanceType {
-// 	case 1:
-// 		lateText = "🟢 ចូលធ្វើការមុនម៉ោង"
-// 	case 2:
-// 		lateText = "🤭 ចូលធ្វើការទាន់ម៉ោង"
-// 	case 3:
-// 		lateText = "🔴 ចូលធ្វើការយឺត"
-// 	case 4:
-// 		lateText = "🤫 ចេញពីធ្វើការមុនម៉ោង"
-// 	case 5:
-// 		lateText = "😴 ចេញពីធ្វើការត្រឹមម៉ោង"
-// 	case 6:
-// 		lateText = "😓 ចេញពីធ្វើការក្រោយម៉ោង"
-// 	}
-
-// 	zoneText := "📍 ស្កែនក្នុងតំបន់ក្រុមហ៊ុន"
-// 	if !inZone {
-// 		zoneText = "⚠️ ស្កែនក្រៅតំបន់ក្រុមហ៊ុន"
-// 	}
-
-// 	checktype := ""
-// 	switch current.recordType {
-// 	case 1:
-// 		checktype = "ចូលធ្វេីការវែនទី១"
-// 	case 2:
-// 		checktype = "ចេញពីធ្វើការវែនទី១"
-// 	case 3:
-// 		checktype = "ចូលធ្វេីការវែនទី២"
-// 	case 4:
-// 		checktype = "ចេញពីធ្វេីការវែនទី២"
-// 	default:
-// 		return fmt.Errorf("unknown record type: %d", current.recordType)
-// 	}
-// 	GroupChatIDDecrypt, err := utils.DecryptChatID(*user.Company.GroupChatID)
-// 	BotTokenDecrypt, err := utils.DecryptBotToken(*user.Company.BotToken)
-// 	message := fmt.Sprintf(
-// 		"<b>%s</b>\n\n"+
-// 			"👤 ឈ្មោះ: %s\n"+
-// 			"🏢 សាខា: %s\n"+
-// 			"🕒 ម៉ោងត្រូវស្កែន: %s\n"+
-// 			"🕒 ម៉ោងបានស្កែន: %s\n"+
-// 			"%s\n"+
-// 			"%s\n"+
-// 			"មូលហេតុ: %s\n",
-// 		checktype,
-// 		user.Name,
-// 		user.Company.Name,
-// 		workTime,
-// 		now.Format("15:04:05"),
-// 		lateText,
-// 		zoneText,
-// 		input.Reason,
-// 	)
-// 	go helper.SendTelegramMessage(message, GroupChatIDDecrypt, BotTokenDecrypt)
-
-// 	if err := tx.Commit().Error; err != nil {
-// 		return err
-// 	}
-// 	committed = true
-// 	return nil
-
-// }
 
 func (s *attendanceservice) GetAttendanceDraft(ctx context.Context, id int) (response.AttendanceResponseDraft, error) {
 	currentDate := helper.CurrentDate()
@@ -769,115 +534,14 @@ func (s *attendanceservice) GetAttendanceDraft(ctx context.Context, id int) (res
 
 }
 
-// func (s *attendanceservice) GetAttendanceDraft(ctx context.Context, id int) (response.AttendanceResponseDraft, error) {
-// 	now := time.Now()
-// 	currentDate := now.Format("2006-01-02")
-// 	dayofweek := helper.GetCurrentDay()
-
-// 	var user model.User
-// 	if err := s.db.WithContext(ctx).Select("id").First(&user, id).Error; err != nil {
-// 		return response.AttendanceResponseDraft{}, fmt.Errorf("user not found: %w", err)
-// 	}
-
-// 	var shift model.Shift
-// 	if err := s.db.WithContext(ctx).Where("user_id = ? AND day = ?", user.ID, dayofweek).First(&shift).Error; err != nil {
-// 		return response.AttendanceResponseDraft{}, fmt.Errorf("shift not found: %w", err)
-// 	}
-
-// 	if shift.IsDayoff {
-// 		return response.AttendanceResponseDraft{}, errors.New("today is a day off")
-// 	}
-
-// 	var attendance model.Attendance
-// 	var existingRecords []model.AttendanceRecord
-
-// 	err := s.db.WithContext(ctx).Where("user_id = ? AND check_date = ?", user.ID, currentDate).First(&attendance).Error
-// 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-// 		return response.AttendanceResponseDraft{}, fmt.Errorf("failed to load attendance: %w", err)
-// 	}
-// 	if err == nil {
-// 		if err := s.db.WithContext(ctx).Where("attendance_id = ?", attendance.ID).
-// 			Order("id ASC").
-// 			Find(&existingRecords).Error; err != nil {
-// 			return response.AttendanceResponseDraft{}, fmt.Errorf("failed to load attendance records: %w", err)
-// 		}
-// 	}
-
-// 	type sessionConfig struct {
-// 		scheduledTime string
-// 		isCheckIn     bool
-// 		recordType    int
-// 	}
-
-// 	var sessions []sessionConfig
-
-// 	switch shift.ShiftType {
-// 	case MorningShiftOnly:
-// 		if shift.CheckIn1 == nil || shift.CheckOut1 == nil {
-// 			return response.AttendanceResponseDraft{}, errors.New("shift type 2: CheckIn1 or CheckOut1 is not configured")
-// 		}
-// 		sessions = []sessionConfig{
-// 			{scheduledTime: *shift.CheckIn1, isCheckIn: true, recordType: 1},
-// 			{scheduledTime: *shift.CheckOut1, isCheckIn: false, recordType: 2},
-// 		}
-// 	case EveningShiftOnly:
-// 		if shift.CheckIn2 == nil || shift.CheckOut2 == nil {
-// 			return response.AttendanceResponseDraft{}, errors.New("shift type 3: CheckIn2 or CheckOut2 is not configured")
-// 		}
-// 		sessions = []sessionConfig{
-// 			{scheduledTime: *shift.CheckIn2, isCheckIn: true, recordType: 3},
-// 			{scheduledTime: *shift.CheckOut2, isCheckIn: false, recordType: 4},
-// 		}
-// 	case FullShift:
-// 		if shift.CheckIn1 == nil || shift.CheckOut1 == nil || shift.CheckIn2 == nil || shift.CheckOut2 == nil {
-// 			return response.AttendanceResponseDraft{}, errors.New("shift: one or more check-in/out times are not configured")
-// 		}
-// 		sessions = []sessionConfig{
-// 			{scheduledTime: *shift.CheckIn1, isCheckIn: true, recordType: 1},
-// 			{scheduledTime: *shift.CheckOut1, isCheckIn: false, recordType: 2},
-// 			{scheduledTime: *shift.CheckIn2, isCheckIn: true, recordType: 3},
-// 			{scheduledTime: *shift.CheckOut2, isCheckIn: false, recordType: 4},
-// 		}
-// 	default:
-
-// 	}
-
-// 	recordCount := len(existingRecords)
-// 	if recordCount >= len(sessions) {
-// 		return response.AttendanceResponseDraft{}, errors.New("all attendance sessions for today have already been recorded")
-// 	}
-
-// 	current := sessions[recordCount]
-
-// 	var checktype string
-// 	switch current.recordType {
-// 	case 1:
-// 		checktype = "ចូលធ្វេីការវែនទី១"
-// 	case 2:
-// 		checktype = "ចេញពីធ្វេីការវែនទី១"
-// 	case 3:
-// 		checktype = "ចូលធ្វេីការវែនទី២"
-// 	case 4:
-// 		checktype = "ចេញពីធ្វេីការវែនទី២"
-// 	default:
-// 		return response.AttendanceResponseDraft{}, fmt.Errorf("unknown record type: %d", current.recordType)
-// 	}
-
-// 	return response.AttendanceResponseDraft{
-// 		Type:          current.recordType,
-// 		TypeString:    checktype,
-// 		ScheduledTime: current.scheduledTime,
-// 	}, nil
-// }
-
 func applyAccessFilterAttendance(query *gorm.DB, db *gorm.DB, role model.Role, user model.User) *gorm.DB {
 	if role.Level > RoleLevelStaft && role.Level <= RoleLevelDeveloper {
 		switch user.ManageCompany {
 		case ManageOneCompany:
-			return query.Where("u.company_id =?", user.CompanyID)
+			return query.Where("u.company_id = ?", user.CompanyID)
 		case ManageMultipleCompany:
 			var companyIDs []int
-			db.Model(&model.UserCompany{}).Where("user_id =?", user.ID).Pluck("company_id", &companyIDs)
+			db.Model(&model.UserCompany{}).Where("user_id = ?", user.ID).Pluck("company_id", &companyIDs)
 			if len(companyIDs) == 0 {
 				return query.Where("1 = 0")
 			}
@@ -888,7 +552,7 @@ func applyAccessFilterAttendance(query *gorm.DB, db *gorm.DB, role model.Role, u
 			return query.Where("1 = 0")
 		}
 	} else if role.Level <= RoleLevelStaft {
-		return query.Where("u.id =?", user.ID)
+		return query.Where("u.id = ?", user.ID)
 	} else if role.Level > RoleLevelManager {
 		return query
 	}
@@ -906,11 +570,11 @@ func applyCommonFilterAttendance(query *gorm.DB, filter map[string]string) *gorm
 		case "name":
 			query = query.Where("u.name LIKE ?", "%"+value+"%")
 		case "company_id":
-			query = query.Where("u.company_id =?", value)
+			query = query.Where("u.company_id = ?", value)
 		case "role_id":
-			query = query.Where("u.role_id =?", value)
+			query = query.Where("u.role_id = ?", value)
 		case "check_date":
-			query = query.Where("a.check_date >=?", value)
+			query = query.Where("a.check_date >= ?", value)
 		}
 	}
 	return query
@@ -923,6 +587,8 @@ func (s *attendanceservice) GetAttendance(ctx context.Context, id int, pf reques
 		return nil, nil, err
 	}
 	offset := (pf.Page - 1) * pf.PageSize
+	// FIX: "user" is a reserved keyword in Postgres — unquoted "LEFT JOIN user u"
+	// is a syntax error there even though MySQL accepts it. Quote it.
 	attendancequery := s.db.WithContext(ctx).Table("attendance a").
 		Select(`
 		a.id AS id,
@@ -936,7 +602,7 @@ func (s *attendanceservice) GetAttendance(ctx context.Context, id int, pf reques
 		a.check_date AS check_date,
 		a.status AS status
 	`).
-		Joins("LEFT JOIN user u ON u.id = a.user_id").
+		Joins(`LEFT JOIN "user" u ON u.id = a.user_id`).
 		Joins("LEFT JOIN company c ON c.id = u.company_id").
 		Joins("LEFT JOIN role r ON r.id = u.role_id")
 
@@ -1031,6 +697,7 @@ func (s *attendanceservice) GetAttendancePDF(ctx context.Context, id int, pf req
 	}
 	offset := (pf.Page - 1) * pf.PageSize
 
+	// FIX: same reserved-word quoting as GetAttendance above.
 	attendancequery := s.db.WithContext(ctx).Table("attendance a").
 		Select(`
 			a.id AS id,
@@ -1044,7 +711,7 @@ func (s *attendanceservice) GetAttendancePDF(ctx context.Context, id int, pf req
 			a.check_date AS check_date,
 			a.status AS status
 		`).
-		Joins("LEFT JOIN user u ON u.id = a.user_id").
+		Joins(`LEFT JOIN "user" u ON u.id = a.user_id`).
 		Joins("LEFT JOIN company c ON c.id = u.company_id").
 		Joins("LEFT JOIN role r ON r.id = u.role_id")
 

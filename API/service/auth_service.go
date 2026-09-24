@@ -63,20 +63,20 @@ var requiredPermissions = []string{
 func (s *authservice) Login(input request.AuthRequest, c *gin.Context) (*response.AuthResponse, error) {
 	key := "login_attempt:" + input.Phone
 	attempts, _ := utils.Redis.Get(utils.Ctx, key).Int()
-	if attempts >= 5 {
+	if attempts >= 10 {
 		return nil, errors.New("អ្នកព្យាយាមចូលច្រើនពេក សូមព្យាយាមម្តងទៀតក្រោយ 10 នាទី")
 	}
 	phonehash := helper.HashPhone(input.Phone)
 	var user model.User
 	if err := s.db.Select("id, phone_hash, password_hash, role_id, is_active, name").
-		Where("phone_hash = ? AND is_active = 1", phonehash).
+		Where("phone_hash = ? AND is_active = ?", phonehash, true).
 		First(&user).Error; err != nil {
 
 		return nil, errors.New("ព័ត៌មានមិនត្រឹមត្រូវ ឬ អ្នកប្រើប្រាស់ត្រូវបានបិទគណនី")
 	}
 
 	var settings []model.Setting
-	if err := s.db.Where("`key` IN ?", []string{
+	if err := s.db.Where(`"key" IN ?`, []string{
 		"ACCESS_TOKEN_EXPIRE_HOURS",
 		"REFRESH_TOKEN_EXPIRE_DAYS",
 	}).Find(&settings).Error; err != nil {
@@ -84,8 +84,8 @@ func (s *authservice) Login(input request.AuthRequest, c *gin.Context) (*respons
 	}
 
 	settingMap := make(map[string]string)
-	for _, s := range settings {
-		settingMap[s.Key] = s.Value
+	for _, st := range settings {
+		settingMap[st.Key] = st.Value
 	}
 
 	accesstoken, err := strconv.Atoi(settingMap["ACCESS_TOKEN_EXPIRE_HOURS"])
@@ -163,14 +163,19 @@ func (s *authservice) LoginByQr(input request.LoginQrRequest, c *gin.Context) (*
 
 	qrtokenhash := helper.HashQrtoken(input.QrToken)
 	var user model.User
+	// FIX: "is_active = 1" compares a boolean column to an integer literal.
+	// MySQL silently coerces this; Postgres has no implicit int->boolean cast
+	// and will throw "operator does not exist: boolean = integer".
 	if err := s.db.Select("id,qr_token,is_active,role_id,name").
-		Where("qr_token = ? AND is_active = 1", qrtokenhash).
+		Where("qr_token = ? AND is_active = ?", qrtokenhash, true).
 		First(&user).Error; err != nil {
 		return nil, errors.New("ព័ត៌មានមិនត្រឹមត្រូវ ឬ អ្នកប្រើប្រាស់ត្រូវបានបិទគណនី")
 	}
 
 	var settings []model.Setting
-	if err := s.db.Where("`key` IN ?", []string{
+	// FIX: backtick-quoted `key` is MySQL-only identifier quoting and is a
+	// syntax error in Postgres. Postgres uses double quotes for identifiers.
+	if err := s.db.Where(`"key" IN ?`, []string{
 		"ACCESS_TOKEN_EXPIRE_HOURS",
 		"REFRESH_TOKEN_EXPIRE_DAYS",
 	}).Find(&settings).Error; err != nil {
@@ -178,8 +183,8 @@ func (s *authservice) LoginByQr(input request.LoginQrRequest, c *gin.Context) (*
 	}
 
 	settingMap := make(map[string]string)
-	for _, s := range settings {
-		settingMap[s.Key] = s.Value
+	for _, st := range settings {
+		settingMap[st.Key] = st.Value
 	}
 
 	accesstoken, err := strconv.Atoi(settingMap["ACCESS_TOKEN_EXPIRE_HOURS"])
@@ -284,7 +289,8 @@ func (s *authservice) RefreshToken(refreshToken string, c *gin.Context) (*respon
 	}
 
 	var settings []model.Setting
-	if err := s.db.Where("`key` IN ?", []string{
+	// FIX: backtick quoting -> double-quote (see LoginByQr note above).
+	if err := s.db.Where(`"key" IN ?`, []string{
 		"ACCESS_TOKEN_EXPIRE_HOURS",
 		"REFRESH_TOKEN_EXPIRE_DAYS",
 	}).Find(&settings).Error; err != nil {
@@ -292,8 +298,8 @@ func (s *authservice) RefreshToken(refreshToken string, c *gin.Context) (*respon
 	}
 
 	settingMap := make(map[string]string)
-	for _, s := range settings {
-		settingMap[s.Key] = s.Value
+	for _, st := range settings {
+		settingMap[st.Key] = st.Value
 	}
 
 	accesstoken, err := strconv.Atoi(settingMap["ACCESS_TOKEN_EXPIRE_HOURS"])
@@ -460,10 +466,10 @@ func applyAccessFilter(query *gorm.DB, db *gorm.DB, role model.Role, user model.
 	if role.Level > 1 && role.Level < 7 {
 		switch user.ManageCompany {
 		case 1:
-			return query.Where("u.company_id =?", user.CompanyID)
+			return query.Where("u.company_id = ?", user.CompanyID)
 		case 2:
 			var companyIDs []int
-			db.Model(&model.UserCompany{}).Where("user_id =?", user.ID).Pluck("company_id", &companyIDs)
+			db.Model(&model.UserCompany{}).Where("user_id = ?", user.ID).Pluck("company_id", &companyIDs)
 			if len(companyIDs) == 0 {
 				return query.Where("1 = 0")
 			}
@@ -471,7 +477,7 @@ func applyAccessFilter(query *gorm.DB, db *gorm.DB, role model.Role, user model.
 		}
 		return query
 	} else if role.Level <= 1 {
-		return query.Where("u.id =?", user.ID)
+		return query.Where("u.id = ?", user.ID)
 	}
 	return query
 }
@@ -485,9 +491,9 @@ func applyCommonFilter(query *gorm.DB, filter map[string]string) *gorm.DB {
 		case "name":
 			query = query.Where("u.name LIKE ?", "%"+value+"%")
 		case "company_id":
-			query = query.Where("u.company_id =?", value)
+			query = query.Where("u.company_id = ?", value)
 		case "role_id":
-			query = query.Where("u.role_id =?", value)
+			query = query.Where("u.role_id = ?", value)
 		}
 	}
 	return query
@@ -501,7 +507,9 @@ func (s *authservice) GetUser(ctx context.Context, id int, pf request.Pagination
 	}
 
 	offset := (pf.Page - 1) * pf.PageSize
-	userquery := s.db.WithContext(ctx).Table("user u").
+	// FIX: "user" is a reserved keyword in Postgres and must be double-quoted
+	// when used as a table name (unquoted "user u" is a syntax error there).
+	userquery := s.db.WithContext(ctx).Table(`"user" u`).
 		Select(`
             u.id AS id,
             u.phone_encrypted AS phone_hash,
@@ -523,7 +531,11 @@ func (s *authservice) GetUser(ctx context.Context, id int, pf request.Pagination
 
 	userquery = applyAccessFilter(userquery, s.db, user.Role, user)
 	userquery = applyCommonFilter(userquery, filter)
-	userquery = userquery.Order("id DESC")
+	// FIX: qualified "u.id" instead of bare "id" — with three joined tables,
+	// an unqualified ORDER BY column is a common source of "column reference
+	// is ambiguous" errors on Postgres if any joined table also has an "id"
+	// column referenced elsewhere; qualifying it removes any doubt.
+	userquery = userquery.Order("u.id DESC")
 	var totalCount int64
 	countQuery := userquery.Session(&gorm.Session{})
 	if err := countQuery.Count(&totalCount).Error; err != nil {
@@ -626,7 +638,7 @@ func (s *authservice) ToggleUserStatus(ctx context.Context, id int, userID int) 
 	if id == userID {
 		return ErrCannotToggleOwnStatus
 	}
-	result := s.db.WithContext(ctx).Model(&model.User{}).Where("id =?", id).Update("is_active", gorm.Expr("NOT is_active"))
+	result := s.db.WithContext(ctx).Model(&model.User{}).Where("id = ?", id).Update("is_active", gorm.Expr("NOT is_active"))
 	if result.Error != nil {
 		return result.Error
 	}
@@ -701,12 +713,27 @@ func (s *authservice) UpdateUser(ctx context.Context, input request.UserRequestU
 		}
 	}
 
+	// FIX: input.ManageCompany was dereferenced with "*input.ManageCompany"
+	// with no nil check. On Postgres this codepath behaves the same as
+	// before (it's a Go-level nil-pointer panic, not a DB issue), but a
+	// panic here gets caught by the deferred recover() above, which rolls
+	// the transaction back and then returns the function's zero-value error
+	// (nil) — silently reporting success on a failed update. Guarding here
+	// avoids that trap.
+	if input.ManageCompany == nil {
+		if err := tx.Commit().Error; err != nil {
+			return err
+		}
+		committed = true
+		return nil
+	}
+
 	if *input.ManageCompany != 2 {
 		if err := tx.Where("user_id = ?", id).Delete(&model.UserCompany{}).Error; err != nil {
 			return err
 		}
-	} else if *input.ManageCompany == 2 {
-		if err := tx.Where("user_id =?", id).Delete(&model.UserCompany{}).Error; err != nil {
+	} else {
+		if err := tx.Where("user_id = ?", id).Delete(&model.UserCompany{}).Error; err != nil {
 			return err
 		}
 		for _, cid := range input.CompanyIDs {
@@ -737,10 +764,15 @@ func (s *authservice) CountUser(ctx context.Context, id int) (response.UserCount
 		return response.UserCount{}, err
 	}
 
+	// FIX: "user" quoted (reserved word) and the CASE condition changed from
+	// comparing a boolean column to the string '1' (u.is_active = '1') to a
+	// direct boolean test. MySQL treats booleans as TINYINT and will happily
+	// compare them to '1'; Postgres has a real boolean type and raises
+	// "operator does not exist: boolean = text" for that comparison.
 	userQuery := s.db.WithContext(ctx).
-		Table("user u").
+		Table(`"user" u`).
 		Select(`
-            COUNT(DISTINCT CASE WHEN u.is_active = '1' THEN u.id END) AS total
+            COUNT(DISTINCT CASE WHEN u.is_active THEN u.id END) AS total
         `)
 
 	userQuery = helper.ApplyAccessFilter(userQuery, s.db, user.Role, user)
@@ -820,7 +852,7 @@ func (s *authservice) GetUserData(ctx context.Context, id int) (response.UserDat
 	var userdata response.UserDataResponse
 
 	err := s.db.WithContext(ctx).
-		Table("user u").
+		Table(`"user" AS u`).
 		Select(`
 			u.id AS id,
 			u.name AS name,
@@ -865,8 +897,9 @@ func (s *authservice) GetUserApprove(ctx context.Context, id int) ([]response.Us
 	}
 
 	var userApproves []response.UserApprove
+	// FIX: "user" quoted (reserved word).
 	err := s.db.WithContext(ctx).
-		Table("user u").
+		Table(`"user" u`).
 		Select(`
 			u.id AS id,
 			u.name AS user_name,

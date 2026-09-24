@@ -48,6 +48,9 @@ func (s *payrollservice) GetDraftPayroll(ctx context.Context, payrolltype int, c
 
 	var rows []rawRow
 
+	// FIX: "user" is a reserved keyword in Postgres and must be double-quoted
+	// as an identifier — unquoted "FROM user u" is valid in MySQL but throws
+	// a syntax error on Postgres.
 	err := s.db.WithContext(ctx).Raw(`
 		SELECT
 			u.id                        AS user_id,
@@ -61,7 +64,7 @@ func (s *payrollservice) GetDraftPayroll(ctx context.Context, payrolltype int, c
 			COUNT(DISTINCT CASE WHEN             a.is_paid = false THEN a.id END) AS total_work_day,
 			COUNT(DISTINCT CASE WHEN ar.attendance_type = 3 AND ar.is_permission = false AND a.is_paid = false THEN ar.id END) AS total_late,
 			COUNT(DISTINCT CASE WHEN ar.attendance_type = 4 AND a.is_paid = false THEN ar.id END) AS total_left_early
-		FROM user u
+		FROM "user" u
 		LEFT JOIN role r ON r.id = u.role_id
 		LEFT JOIN company c ON c.id = u.company_id
 		LEFT JOIN attendance a ON a.user_id = u.id
@@ -259,10 +262,10 @@ func applyAccessFilterPayroll(query *gorm.DB, db *gorm.DB, role model.Role, user
 	if role.Level > 1 && role.Level < 7 {
 		switch user.ManageCompany {
 		case 1:
-			return query.Where("u.company_id =?", user.CompanyID)
+			return query.Where("u.company_id = ?", user.CompanyID)
 		case 2:
 			var companyIDs []int
-			db.Model(&model.UserCompany{}).Where("user_id =?", user.ID).Pluck("company_id", &companyIDs)
+			db.Model(&model.UserCompany{}).Where("user_id = ?", user.ID).Pluck("company_id", &companyIDs)
 			if len(companyIDs) == 0 {
 				return query.Where("1 = 0")
 			}
@@ -270,7 +273,7 @@ func applyAccessFilterPayroll(query *gorm.DB, db *gorm.DB, role model.Role, user
 		}
 		return query
 	} else if role.Level <= 1 {
-		return query.Where("u.id =?", user.ID)
+		return query.Where("u.id = ?", user.ID)
 	}
 	return query
 }
@@ -284,11 +287,15 @@ func applyCommonFilterPayroll(query *gorm.DB, filter map[string]string) *gorm.DB
 		case "name":
 			query = query.Where("u.name LIKE ?", "%"+value+"%")
 		case "payroll_date":
-			query = query.Where("DATE_FORMAT(p.payroll_date, '%Y-%m') = ?", value)
+			// FIX: DATE_FORMAT() is a MySQL-only function and does not exist
+			// in Postgres ("function date_format does not exist"). Postgres's
+			// equivalent is TO_CHAR, which uses its own format-string tokens
+			// (YYYY-MM instead of %Y-%m).
+			query = query.Where("TO_CHAR(p.payroll_date, 'YYYY-MM') = ?", value)
 		case "payroll_type":
-			query = query.Where("p.payroll_type =?", value)
+			query = query.Where("p.payroll_type = ?", value)
 		case "company_id":
-			query = query.Where("u.company_id =?", value)
+			query = query.Where("u.company_id = ?", value)
 		}
 	}
 	return query
@@ -312,9 +319,10 @@ func (s *payrollservice) GetPayroll(
 
 	offset := (pf.Page - 1) * pf.PageSize
 
+	// FIX: "user" quoted (reserved keyword, see note above).
 	baseQuery := s.db.WithContext(ctx).
 		Table("payroll AS p").
-		Joins("LEFT JOIN user u ON u.id = p.user_id").
+		Joins(`LEFT JOIN "user" u ON u.id = p.user_id`).
 		Joins("LEFT JOIN role r ON r.id = u.role_id").
 		Joins("LEFT JOIN company c ON c.id = u.company_id")
 

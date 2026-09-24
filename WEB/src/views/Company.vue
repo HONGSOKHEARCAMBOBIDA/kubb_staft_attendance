@@ -138,8 +138,8 @@
               </el-form-item>
               <el-form-item label="អាចស្កែនក្រៅតំបន់" prop="can_scan_outsize">
                 <el-radio-group v-model="form.can_scan_outsize" size="large">
-                  <el-radio-button :value="1">អាចស្កែនបាន</el-radio-button>
-                  <el-radio-button :value="0">មិនអាចស្កែនបាន</el-radio-button>
+                  <el-radio-button :value=true>អាចស្កែនបាន</el-radio-button>
+                  <el-radio-button :value=false>មិនអាចស្កែនបាន</el-radio-button>
                 </el-radio-group>
               </el-form-item>
               <el-form-item label="Color">
@@ -300,7 +300,7 @@ const form = reactive({
   left_early_penalty: "",
   bot_token: "",
   group_link: "",
-  can_scan_outsize: null,
+  can_scan_outsize: false,
   color: "",
   total_work_day:null
 });

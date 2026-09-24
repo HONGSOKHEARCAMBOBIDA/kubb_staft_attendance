@@ -11,7 +11,7 @@ type AttendanceRecordResponse struct {
 	CheckTime          string `json:"check_time"`
 	Type               int    `json:"type"`
 	TypeString         string `json:"type_string"`
-	Inzone             int    `json:"inzone"`
+	Inzone             bool   `json:"inzone"`
 	Latitude           string `json:"latitdude" gorm:"column:latitdude"`
 	Longitude          string `json:"longitude" gorm:"column:longitude"`
 	ScheduledTime      string `json:"scheduled_time"`

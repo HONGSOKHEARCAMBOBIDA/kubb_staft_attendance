@@ -97,7 +97,7 @@ func validateLeaveRequestInput(input request.LeaveRequestCreate) error {
 func hasOverlappingLeaveRequest(tx *gorm.DB, userID int, startDate, endDate string) (bool, error) {
 	var count int64
 	err := tx.Model(&model.LeaveRequest{}).
-		Where("user_id =?", userID).
+		Where("user_id = ?", userID).
 		Where("status = ?", LeaveStatusPending).
 		Where("start_date <= ? AND end_date >= ?", endDate, startDate).
 		Count(&count).Error
@@ -389,7 +389,11 @@ func (s *leaveRequestService) UpdateLeaveRequest(ctx context.Context, id int, us
 	})
 
 	if err != nil {
-		fmt.Errorf("failed to update leave request", "id", id, "error", err)
+		// FIX: this was fmt.Errorf("failed to update leave request", "id", id, "error", err) —
+		// fmt.Errorf only understands %w/%s-style verbs, so "id" and "error" were silently
+		// dropped, and the resulting error value was discarded anyway (err is returned
+		// directly below). Swapped for an actual logged line.
+		log.Printf("failed to update leave request id=%d: %v", id, err)
 		return err
 	}
 
@@ -406,10 +410,19 @@ func (s *leaveRequestService) UpdateStatusLeaveRequest(ctx context.Context, user
 		return fmt.Errorf("faile to start transaction: %w", tx.Error)
 	}
 
+	// FIX: previously only rolled back on a panic via recover(). Every normal
+	// error return below used to leave the transaction open. On Postgres,
+	// any error inside a transaction puts it into an aborted state that
+	// blocks all further commands on that connection until it's explicitly
+	// rolled back — so a pooled connection reused before this transaction
+	// timed out would throw "current transaction is aborted, commands
+	// ignored until end of transaction block" on unrelated queries.
+	committed := false
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
-
+		} else if !committed {
+			tx.Rollback()
 		}
 	}()
 
@@ -436,18 +449,21 @@ func (s *leaveRequestService) UpdateStatusLeaveRequest(ctx context.Context, user
 	// 	return errors.New("មិនអាចធ្វើបច្ចុប្បន្នភាពស្ថានភាពបានទេ")
 	// }
 
-	return tx.Commit().Error
-
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func applyAccessFilterLeaveRequest(query *gorm.DB, db *gorm.DB, role model.Role, user model.User) *gorm.DB {
 	if role.Level > RoleLevelStaft && role.Level <= RoleLevelManager {
 		switch user.ManageCompany {
 		case ManageOneCompany:
-			return query.Where("u.company_id =?", user.CompanyID)
+			return query.Where("u.company_id = ?", user.CompanyID)
 		case ManageMultipleCompany:
 			var companyIDs []int
-			db.Model(&model.UserCompany{}).Where("user_id =?", user.ID).Pluck("company_id", &companyIDs)
+			db.Model(&model.UserCompany{}).Where("user_id = ?", user.ID).Pluck("company_id", &companyIDs)
 			if len(companyIDs) == 0 {
 				return query.Where("1 = 0")
 			}
@@ -458,7 +474,7 @@ func applyAccessFilterLeaveRequest(query *gorm.DB, db *gorm.DB, role model.Role,
 			return query.Where("1 = 0")
 		}
 	} else if role.Level <= RoleLevelStaft {
-		return query.Where("u.id =?", user.ID)
+		return query.Where("u.id = ?", user.ID)
 	} else if role.Level > RoleLevelManager {
 		return query
 	}
@@ -476,11 +492,11 @@ func applyCommonFilterLeaveRequest(query *gorm.DB, filter map[string]string) *go
 		case "name":
 			query = query.Where("u.name LIKE ?", "%"+helper.EscapeLike(value)+"%")
 		case "company_id":
-			query = query.Where("u.company_id =?", value)
+			query = query.Where("u.company_id = ?", value)
 		case "role_id":
-			query = query.Where("u.role_id =?", value)
+			query = query.Where("u.role_id = ?", value)
 		case "status":
-			query = query.Where("l.status =?", value)
+			query = query.Where("l.status = ?", value)
 		}
 	}
 	return query
@@ -503,6 +519,9 @@ func (s *leaveRequestService) GetLeaveRequest(ctx context.Context, id int, pf re
 	}
 	offset := (pf.Page - 1) * pf.PageSize
 
+	// FIX: "user" is a reserved keyword in Postgres and must be double-quoted
+	// when used as a table name. It's joined twice here (once as the
+	// requester "u", once as the approver "ua") — both needed quoting.
 	query := s.db.WithContext(ctx).Table("leave_request l").
 		Select(`
 		l.id AS id,
@@ -528,12 +547,12 @@ func (s *leaveRequestService) GetLeaveRequest(ctx context.Context, id int, pf re
 		ua.name AS approve_by_name,
 		l.approved_at AS approved_at
 	`).
-		Joins("LEFT JOIN user u ON u.id = l.user_id").
+		Joins(`LEFT JOIN "user" u ON u.id = l.user_id`).
 		Joins("LEFT JOIN role r ON r.id = u.role_id").
 		Joins("LEFT JOIN company c ON c.id = u.company_id").
 		Joins("LEFT JOIN leave_type lt ON lt.id = l.leave_type_id").
 		Joins("LEFT JOIN leave_deduct_type ld ON ld.id = l.deduct_type_id").
-		Joins("LEFT JOIN user ua ON ua.id = l.approve_by")
+		Joins(`LEFT JOIN "user" ua ON ua.id = l.approve_by`)
 
 	query = applyAccessFilterLeaveRequest(query, s.db, user.Role, user)
 	query = applyCommonFilterLeaveRequest(query, filter)

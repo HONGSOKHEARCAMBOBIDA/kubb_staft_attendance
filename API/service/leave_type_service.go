@@ -45,7 +45,7 @@ func (s *leavetypeservice) GetLeaveTypes(ctx context.Context, userID int) ([]res
 			lt.is_active AS is_active,
 			lt.is_deduct AS is_deduct
 		`).
-		Joins("LEFT JOIN company c ON c.id = lt.company_id")
+		Joins(`LEFT JOIN "company" AS c ON c.id = lt.company_id`)
 
 	query = helper.ManageCompanyFilter(query, s.db, user)
 
