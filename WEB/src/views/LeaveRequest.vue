@@ -262,7 +262,6 @@ onUnmounted(() => clearTimeout(searchTimer));
         { slot: 'name', span: 7 },
         { slot: 'status', span: 6 },
         { slot: 'company', span: 6 },
-        { slot: 'add', span: 4 },
       ]"
       :action-span="4"
     >
@@ -310,7 +309,7 @@ onUnmounted(() => clearTimeout(searchTimer));
         </el-select>
       </template>
 
-      <template #add>
+      <template #actions>
         <AppButton type="primary" @click="openCreateDialog">
           បន្ថែមច្បាប់
         </AppButton>

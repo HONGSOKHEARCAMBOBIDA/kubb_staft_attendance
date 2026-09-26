@@ -242,7 +242,7 @@ watch(activeTab, (tab) => {
     width: 100%;
     max-width: 420px;
     padding: 24px 20px;
-    border-radius: 25px;
+    border-radius: 2px;
   }
 }
 </style>
